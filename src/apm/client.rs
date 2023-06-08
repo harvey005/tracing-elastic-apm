@@ -1,10 +1,11 @@
 use std::{
     fmt::{Display, Formatter, Result},
     ops::Deref,
-    sync::Arc,
+    sync::Arc, thread, time::Duration,
 };
 
 use anyhow::Result as AnyResult;
+use base64::{engine::general_purpose, Engine};
 use reqwest::{header, Client};
 use serde_json::{json, Value};
 use std::io::Read;
@@ -13,7 +14,10 @@ use tokio::runtime::Runtime;
 use tracing::subscriber;
 use tracing::subscriber::NoSubscriber;
 
-use crate::config::Authorization;
+use crate::apm::config::Authorization;
+
+use super::metric::gather_metrics;
+
 
 #[derive(Debug)]
 pub(crate) struct Batch {
@@ -21,6 +25,7 @@ pub(crate) struct Batch {
     transaction: Option<Value>,
     span: Option<Value>,
     error: Option<Value>,
+    metricset: Option<Value>,
 }
 
 impl Display for Batch {
@@ -39,6 +44,10 @@ impl Display for Batch {
             writeln!(f, "{}", json!({ "error": error }))?;
         }
 
+        if let Some(metricset) = &self.metricset {
+            writeln!(f, "{}", json!({ "metricset": metricset }))?;
+        }
+
         Ok(())
     }
 }
@@ -49,12 +58,14 @@ impl Batch {
         transaction: Option<Value>,
         span: Option<Value>,
         error: Option<Value>,
+        metricset: Option<Value>,
     ) -> Self {
         Batch {
             metadata,
             transaction,
             span,
             error,
+            metricset
         }
     }
 }
@@ -64,7 +75,10 @@ pub(crate) struct ApmClient {
     authorization: Option<Arc<String>>,
     client: Client,
     runtime: Runtime,
+    _metadata: crate::apm::metadata::Metadata,
 }
+
+static mut ENABLE_METRIC_GATGHER :bool = false;
 
 impl ApmClient {
     pub fn new(
@@ -72,15 +86,15 @@ impl ApmClient {
         authorization: Option<Authorization>,
         allow_invalid_certs: bool,
         root_cert_path: Option<String>,
+        metadata: crate::apm::metadata::Metadata,
     ) -> AnyResult<Self> {
         let authorization = authorization
             .map(|authorization| match authorization {
                 Authorization::SecretToken(token) => format!("Bearer {}", token),
                 Authorization::ApiKey(key) => {
-                    format!(
-                        "ApiKey {}",
-                        base64::encode(format!("{}:{}", key.id, key.key))
-                    )
+                    let text  = format!("{}:{}", key.id, key.key);
+                    let encoded: String = general_purpose::STANDARD_NO_PAD.encode(text.as_bytes());
+                    format!("ApiKey {}",encoded)
                 }
             })
             .map(Arc::new);
@@ -106,20 +120,65 @@ impl ApmClient {
             .build()?;
 
         Ok(ApmClient {
-            apm_address: Arc::new(apm_address),
+            apm_address: Arc::new(apm_address.to_string()),
             authorization,
             client,
             runtime,
+            _metadata:metadata
         })
     }
 
-    pub fn send_batch(&self, batch: Batch) {
+    pub fn _enable_metric_gather(&self) {
+        let client = self.client.clone();
+        let apm_address = self.apm_address.clone();
+        let authorization = self.authorization.clone();
+        let metadata = self._metadata.json_metadata.clone();
+
+        unsafe { ENABLE_METRIC_GATGHER = true };
+        
+        self.runtime.spawn(async move {
+            loop {
+                if unsafe { !ENABLE_METRIC_GATGHER } {
+                    break;
+                }
+                let metric = super::metric::gather_metrics();
+                let batch = Batch::new(metadata.clone(), None, None, None,Some(json!(metric)));
+                let _subscriber_guard = subscriber::set_default(NoSubscriber::default());
+                let mut request = client
+                    .post(&format!("{}/intake/v2/events", apm_address))
+                    .header(
+                        header::CONTENT_TYPE,
+                        header::HeaderValue::from_static("application/x-ndjson"),
+                    )
+                    .body(batch.to_string());
+
+                if let Some(authorization) = &authorization {
+                    request = request.header(header::AUTHORIZATION, authorization.deref());
+                }
+
+                let result = request.send().await;
+                if let Err(error) = result {
+                    eprintln!("Error sending batch to APM: {}", error);
+                }
+                thread::sleep(Duration::from_secs(30));
+            }
+            
+        });
+    }
+
+    pub fn disable_metric_gather(&self) {
+        unsafe { ENABLE_METRIC_GATGHER = false };
+    }
+
+
+    pub fn send_batch(&self,mut batch:Batch) {
         let client = self.client.clone();
         let apm_address = self.apm_address.clone();
         let authorization = self.authorization.clone();
 
         self.runtime.spawn(async move {
             let _subscriber_guard = subscriber::set_default(NoSubscriber::default());
+            batch.metricset = Some(json!(gather_metrics()));
             let mut request = client
                 .post(&format!("{}/intake/v2/events", apm_address))
                 .header(
@@ -127,7 +186,6 @@ impl ApmClient {
                     header::HeaderValue::from_static("application/x-ndjson"),
                 )
                 .body(batch.to_string());
-
             if let Some(authorization) = &authorization {
                 request = request.header(header::AUTHORIZATION, authorization.deref());
             }
@@ -137,5 +195,12 @@ impl ApmClient {
                 eprintln!("Error sending batch to APM: {}", error);
             }
         });
+    }
+}
+
+impl Drop for ApmClient {
+    fn drop(&mut self) {
+        println!(" ApmClient Drop");
+        self.disable_metric_gather()
     }
 }
