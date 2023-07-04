@@ -74,7 +74,7 @@ pub(crate) fn gather_metrics() -> model::Metrics {
 
 #[cfg(test)]
 mod tests {
-    use std::{process, fmt::Debug};
+    use std::process;
 
     use sysinfo::{System, SystemExt, ProcessExt, CpuExt};
     use super::*;
