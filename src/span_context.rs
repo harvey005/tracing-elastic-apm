@@ -5,13 +5,6 @@ use std::hash::Hash;
 use std::num::ParseIntError;
 use rand::Rng;
 
-// pub struct SpanContext {
-//     pub duration: Duration,
-//     pub last_timestamp: Instant,
-// }
-
-// use crate::error::{TraceResult, TraceError};
-
 /// Helper to create span ids for testing
 impl SpanId {
     pub fn _from_u64(num: u64) -> Self {
