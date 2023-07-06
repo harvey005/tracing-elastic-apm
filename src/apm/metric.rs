@@ -94,10 +94,8 @@ mod tests {
                 let cpu_info = sys.global_cpu_info();
                 println!("{}            =   {:?}",METRIC_SYSTEM_CPU_USAGE,cpu_info.cpu_usage());
                 println!("{}            =   {:?}",METRIC_PROCESS_CPU_USAGE,process.cpu_usage());
-
                 println!("{}            =   {:?}",METRIC_SYSTEM_MEM_TOTAL,sys.total_memory() as f64 );
                 println!("{}            =   {:?}",METRIC_SYSTEM_MEM_FREE,sys.free_memory() as f64);
-                
                 println!("{}            =   {:?}",METRIC_PROCESS_MEM_VIRTUAL,process.virtual_memory() as f64 / 1000.0);
                 println!("{}            =   {:?}",METRIC_PROCESS_MEM_RESIDENT,process.memory() as f64 );
                 println!("===============================");
