@@ -74,7 +74,7 @@ pub(crate) fn gather_metrics() -> model::Metrics {
 
 #[cfg(test)]
 mod tests {
-    use std::process;
+    use std::process; //fix deepsource issue
 
     use sysinfo::{System, SystemExt, ProcessExt, CpuExt};
     use super::*;
